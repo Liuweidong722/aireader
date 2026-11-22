@@ -1,0 +1,592 @@
+// Development only: an in-memory backend so the UI can run in a plain browser
+// (`npm run dev`, then open http://localhost:1420). Never included in production builds.
+
+import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
+import type {
+  AiConfig,
+  AiEvent,
+  AiTask,
+  Annotations,
+  Block,
+  Book,
+  Card,
+  ChatRecord,
+  DictRecord,
+  Location,
+  OpdsCatalog,
+  OpdsEntry,
+  PaperInfo,
+  Source,
+  TextRun,
+} from "../types";
+
+const now = () => Math.floor(Date.now() / 1000);
+
+function book(id: string, title: string, author: string | null, format: string, group: string | null, progress = 0): Book {
+  return {
+    id,
+    title,
+    author,
+    format,
+    fileName: `${title}.${format.toLowerCase()}`,
+    size: 1_234_567,
+    sha256: id.padEnd(64, "0"),
+    hasCover: false,
+    added: now() - Number.parseInt(id, 16) * 3600,
+    lastRead: progress > 0 ? now() - Number.parseInt(id, 16) * 600 : null,
+    progress,
+    position: null,
+    group,
+    readSeconds: progress > 0 ? 3600 * progress : 0,
+    readingSpeed: null,
+    rotation: 0,
+    missing: false,
+    synced: false,
+    paper: null,
+  };
+}
+
+const SAMPLE_PAPER: PaperInfo = {
+  kind: "preprint",
+  title: "Attention Is All You Need",
+  authors: ["Vaswani, Ashish", "Shazeer, Noam"],
+  year: 2017,
+  venue: null,
+  volume: null,
+  issue: null,
+  pages: null,
+  publisher: null,
+  doi: null,
+  arxiv: "1706.03762",
+  url: "https://arxiv.org/abs/1706.03762",
+  summary: "The dominant sequence transduction models are based on complex recurrent or convolutional neural networks.",
+  pdfUrl: "https://arxiv.org/pdf/1706.03762",
+};
+
+const PARAGRAPH =
+  "话说天下大势，分久必合，合久必分。周末七国分争，并入于秦。及秦灭之后，楚、汉分争，又并入于汉。汉朝自高祖斩白蛇而起义，一统天下，后来光武中兴，传至献帝，遂分为三国。";
+
+function chapter(i: number): Block[] {
+  const blocks: Block[] = [{ kind: "heading", value: { level: 2, spans: [{ text: `第${i + 1}回 示例章节` }] } }];
+  for (let p = 0; p < 30; p++) {
+    blocks.push({ kind: "paragraph", value: [{ text: `　　${PARAGRAPH}` }, ...(p === 2 ? [{ text: "加粗文字", bold: true }] : [])] });
+    if (p === 5) blocks.push({ kind: "quote", value: [{ text: "滚滚长江东逝水，浪花淘尽英雄。" }] });
+    if (p === 8) blocks.push({ kind: "listItem", value: { marker: "•", depth: 0, spans: [{ text: "列表项" }] } });
+  }
+  return blocks;
+}
+
+/** A picture of a page of text, for trying out text recognition. */
+async function samplePage(page: number, width: number): Promise<ArrayBuffer> {
+  const canvas = new OffscreenCanvas(width, Math.round(width * 1.4));
+  const c = canvas.getContext("2d")!;
+  c.fillStyle = "#fff";
+  c.fillRect(0, 0, canvas.width, canvas.height);
+  c.fillStyle = "#222";
+  c.font = `${Math.round(width / 26)}px serif`;
+  for (let i = 0; i < 12; i++) c.fillText(`第${page + 1}页 第${i + 1}行 话说天下大势分久必合合久必分`, width * 0.1, width * 0.12 * (i + 1));
+  return (await canvas.convertToBlob({ type: "image/jpeg" })).arrayBuffer();
+}
+
+export function installMock() {
+  mockWindows("main");
+  const db = {
+    sync: { backend: "", url: "", username: "", folder: "", files: false },
+    ocr: new Map<number, TextRun[]>(),
+    books: [
+      book("0001", "三国演义", "罗贯中", "TXT", "小说", 0.42),
+      book("0002", "Alice's Adventures in Wonderland", "Lewis Carroll", "EPUB", "小说", 0.1),
+      book("0003", "Attention Is All You Need", "Vaswani et al.", "PDF", "技术"),
+      book("0004", "Rust 程序设计语言", null, "MD", "技术", 1),
+      book("0005", "漫画样例", null, "CBZ", null),
+    ],
+    groups: ["小说", "技术"],
+    settings: {} as unknown,
+    annotations: new Map<string, Annotations>(),
+    ai: { provider: "", model: "", baseUrl: null, language: "auto", consented: false, embedding: { provider: "", model: "", baseUrl: null } } as AiConfig,
+    aiKey: false,
+    indexed: new Set<string>(),
+    cards: [] as Card[],
+    reviewed: 0,
+    catalogs: [] as OpdsCatalog[],
+    seen: 0,
+    dicts: [] as DictRecord[],
+  };
+  const aiStatus = () => ({
+    config: db.ai,
+    hasKey: db.aiKey,
+    hasEmbeddingKey: false,
+    local: db.ai.provider === "ollama",
+    configured: !!db.ai.provider && !!db.ai.model,
+  });
+  /** Streams `text` to a Channel in small pieces, then finishes. */
+  const stream = (channel: { id: number }, text: string, progress = false, sources?: Source[]) => {
+    let index = 0;
+    const send = (message: AiEvent) =>
+      (window as unknown as { __TAURI_INTERNALS__: { runCallback: (id: number, d: unknown) => void } }).__TAURI_INTERNALS__.runCallback(channel.id, {
+        index: index++,
+        message,
+      });
+    const pieces = text.match(/.{1,6}/gs) ?? [];
+    let t = 0;
+    if (sources) setTimeout(() => send({ type: "sources", sources }), (t += 80));
+    if (progress) [0, 1, 2].forEach((i) => setTimeout(() => send({ type: "progress", done: i, total: 3, label: `正在总结「第${i + 1}回」` }), (t += 150)));
+    pieces.forEach((p) => setTimeout(() => send({ type: "delta", text: p }), (t += 40)));
+    setTimeout(() => send({ type: "usage", input: 1834, output: text.length, cost: 0.0021 }), (t += 20));
+    setTimeout(() => send({ type: "done", text, cached: false }), (t += 60));
+  };
+  let nextId = 6;
+  const chats = new Map<string, ChatRecord[]>();
+
+  mockIPC(
+    (cmd, args) => {
+      const a = (args ?? {}) as Record<string, unknown>;
+      const find = (id: unknown) => db.books.find((b) => b.id === id)!;
+      switch (cmd) {
+        case "list_books":
+          return { books: db.books, groups: db.groups };
+        case "take_startup_book":
+          return null;
+        case "import_books": {
+          const added = (a.paths as string[]).map((p) => {
+            const name = p.split("/").pop()!;
+            const b = book(String(nextId++).padStart(4, "0"), name.replace(/\.[^.]+$/, ""), null, "EPUB", (a.group as string | undefined) ?? null);
+            b.added = now();
+            db.books.push(b);
+            return name;
+          });
+          return { added, duplicates: [], failed: [], possibleDuplicates: [] };
+        }
+        case "update_book": {
+          const b = find(a.id);
+          const patch = a.patch as Partial<Book>;
+          if (patch.title !== undefined) b.title = patch.title;
+          if (patch.author !== undefined) b.author = patch.author || null;
+          if (patch.group !== undefined) {
+            b.group = patch.group || null;
+            if (b.group && !db.groups.includes(b.group)) db.groups.push(b.group);
+          }
+          return b;
+        }
+        case "ai_semantic_status":
+          return {
+            available: !!db.ai.embedding?.provider,
+            local: db.ai.embedding?.provider === "ollama",
+            passages: db.indexed.has(a.bookId as string) ? 120 : 0,
+            stale: false,
+          };
+        case "list_chats":
+          return chats.get(a.bookId as string) ?? [];
+        case "save_chat": {
+          const list = (chats.get(a.bookId as string) ?? []).filter((c) => c.id !== (a.chat as ChatRecord).id);
+          chats.set(a.bookId as string, [a.chat as ChatRecord, ...list]);
+          return null;
+        }
+        case "delete_chat":
+          for (const [k, list] of chats)
+            chats.set(
+              k,
+              list.filter((c) => c.id !== a.id),
+            );
+          return null;
+        case "list_fonts":
+          return ["LXGW WenKai.ttf"];
+        case "import_font":
+          return "LXGW WenKai.ttf";
+        case "remove_font":
+          return null;
+        case "sync_status":
+          return { config: db.sync, hasPassword: false, signedIn: db.sync.backend === "server", lastSync: null, running: false, error: null };
+        case "sync_save":
+          db.sync = a.config as typeof db.sync;
+          return { config: db.sync, hasPassword: Boolean(a.password), signedIn: db.sync.backend === "server", lastSync: now(), running: false, error: null };
+        case "sync_server_info":
+          return { registration: true, minPassword: 8 };
+        case "sync_server_sign_in":
+          if (a.password === "wrong") throw "Wrong username or password";
+          db.sync = { ...(a.config as typeof db.sync), backend: "server" };
+          return { config: db.sync, hasPassword: false, signedIn: true, lastSync: now(), running: false, error: null };
+        case "sync_server_sign_out":
+          db.sync = { ...db.sync, backend: "" };
+          return { config: db.sync, hasPassword: false, signedIn: false, lastSync: now(), running: false, error: null };
+        case "sync_test":
+        case "sync_now":
+        case "sync_fetch_book":
+          return null;
+        case "open_website":
+          return null;
+        case "opds_catalogs":
+          return db.catalogs;
+        case "opds_save_catalog": {
+          const c = { ...(a.catalog as OpdsCatalog) };
+          c.id ||= String(db.catalogs.length + 1);
+          db.catalogs = [...db.catalogs.filter((x) => x.id !== c.id), c];
+          return db.catalogs;
+        }
+        case "opds_remove_catalog":
+          db.catalogs = db.catalogs.filter((c) => c.id !== a.id);
+          return db.catalogs;
+        case "opds_search":
+        case "opds_feed": {
+          const book = (n: number): OpdsEntry => ({
+            id: `b${n}`,
+            title: `示例图书 ${n}`,
+            author: "佚名",
+            summary: "一段来自书源的简介，用来看列表的排版效果。",
+            cover: null,
+            link: null,
+            downloads: [
+              { url: `http://x/${n}.epub`, mime: "application/epub+zip", format: "EPUB", extension: "epub", title: "EPUB (no images)" },
+              { url: `http://x/${n}.pdf`, mime: "application/pdf", format: "PDF", extension: "pdf", title: null },
+            ],
+          });
+          if (cmd === "opds_search" || a.url) {
+            const page = a.url === "more" ? 1 : 0;
+            return { title: "书籍", entries: [0, 1, 2].map((i) => book(page * 3 + i)), next: page ? null : "more", search: null };
+          }
+          return {
+            title: "示例书库",
+            entries: [{ id: "n1", title: "热门图书", author: null, summary: "最近下载最多", cover: null, link: "http://x/top", downloads: [] }, book(9)],
+            next: null,
+            search: "http://x/search?q={searchTerms}",
+          };
+        }
+        case "opds_image":
+          return null;
+        case "opds_download": {
+          const b = book(String(nextId++).padStart(4, "0"), a.title as string, null, "EPUB", null);
+          db.books.push(b);
+          return { id: b.id, added: true };
+        }
+        case "reading_report": {
+          // Sample reading on most days of the last four months.
+          const days: { day: string; seconds: number }[] = [];
+          for (let i = 120; i >= 0; i--) {
+            const d = new Date(Date.now() - i * 86_400_000);
+            if ((i * 7) % 5 === 4) continue;
+            days.push({ day: d.toISOString().slice(0, 10), seconds: 300 + ((i * 2311) % 5400) });
+          }
+          const year = a.year as number;
+          const shown = days.filter((d) => d.day.startsWith(String(year)));
+          return {
+            streak: 4,
+            longestStreak: 12,
+            today: 1500,
+            last7Days: 15_300,
+            last30Days: 72_000,
+            lifetimeSeconds: 540_000,
+            years: [year],
+            days: shown,
+            yearSeconds: shown.reduce((n, d) => n + d.seconds, 0),
+            books: [
+              { bookId: "0001", title: "三国演义", seconds: 180_000 },
+              { bookId: "0002", title: "Alice's Adventures in Wonderland", seconds: 96_000 },
+              { bookId: "0004", title: "Rust 程序设计语言", seconds: 42_000 },
+            ],
+            highlights: 86,
+            cardsReviewed: 412,
+            finished: [{ id: "0004", title: "Rust 程序设计语言", finished: now() - 864_000 }],
+          };
+        }
+        case "daily_highlights":
+          return db.seen < 2
+            ? [0, 1].slice(db.seen).map((i) => ({
+                id: `h${i}`,
+                bookId: "0001",
+                bookTitle: "三国演义",
+                text: PARAGRAPH.slice(0, 40),
+                note: i === 0 ? "开篇的总论" : null,
+                color: "yellow",
+                location: { kind: "flow", chapter: 0, block: 1 },
+              }))
+            : [];
+        case "highlight_seen":
+          db.seen += 1;
+          return null;
+        case "lookup_word":
+          return db.dicts.length && String(a.word).length < 20 ? [{ dictionary: db.dicts[0].name, word: String(a.word), text: "n. 示例释义\n例句一则" }] : [];
+        case "find_card":
+          return db.cards.find((c) => c.bookId === a.bookId && c.front.toLowerCase() === String(a.front).toLowerCase()) ?? null;
+        case "add_card": {
+          const c: Card = { ...(a.card as Card), created: now(), suspended: false, due: now(), reps: 0, lapses: 0 };
+          db.cards.unshift(c);
+          return c;
+        }
+        case "list_cards":
+          return db.cards.filter((c) => !a.bookId || c.bookId === a.bookId);
+        case "due_cards":
+          return db.cards.filter((c) => !c.suspended && c.due <= now());
+        case "card_stats":
+          return { total: db.cards.length, due: db.cards.filter((c) => !c.suspended && c.due <= now()).length, reviewedToday: db.reviewed };
+        case "update_card":
+          Object.assign(
+            db.cards.find((c) => c.id === a.id)!,
+            a.patch,
+          );
+          return db.cards.find((c) => c.id === a.id);
+        case "delete_card":
+          db.cards = db.cards.filter((c) => c.id !== a.id);
+          return null;
+        case "card_intervals":
+          return [60, 600, 86_400, 8 * 86_400];
+        case "review_card": {
+          const c = db.cards.find((x) => x.id === a.id)!;
+          c.reps += 1;
+          c.due = now() + [60, 600, 86_400, 8 * 86_400][(a.rating as number) - 1];
+          db.reviewed += 1;
+          return { ...c };
+        }
+        case "export_cards":
+          return "/Users/me/AiReader-cards.csv";
+        case "list_dictionaries":
+          return db.dicts;
+        case "import_dictionary":
+          db.dicts = [...db.dicts, { id: String(db.dicts.length + 1), name: "简明英汉词典", words: 54_321, enabled: true }];
+          return db.dicts;
+        case "set_dictionaries":
+          db.dicts = a.records as DictRecord[];
+          return null;
+        case "search_library":
+          return [
+            {
+              bookId: "0001",
+              hits: [
+                { location: { kind: "flow", chapter: 1, block: 3 }, title: "第2回 示例章节", snippet: `…话说天下大势，${String(a.query)}，分久必合…` },
+                { location: { kind: "flow", chapter: 2, block: 5 }, title: "第3回 示例章节", snippet: `…周末七国分争，${String(a.query)}，并入于秦…` },
+              ],
+            },
+            { bookId: "0003", hits: [{ location: { kind: "page", page: 2 }, title: "", snippet: `The dominant ${String(a.query)} models…` }] },
+          ];
+        case "fulltext_status":
+          return { done: 3, total: 12 };
+        case "stop_indexing":
+          return null;
+        case "export_notes":
+          return a.id ? "/Users/me/笔记.md" : "/Users/me/AiReader-notes";
+        case "backup_library":
+          return `/Users/me/AiReader-backup${a.books ? "-full" : ""}.zip`;
+        case "find_duplicates":
+          return [];
+        case "merge_duplicates":
+          return { removed: 0, highlights: 0, bookmarks: 0 };
+        case "remove_books":
+          db.books = db.books.filter((b) => !(a.ids as string[]).includes(b.id));
+          return null;
+        case "create_group":
+          if (db.groups.includes(a.name as string)) throw `分组「${a.name}」已存在`;
+          db.groups.push(a.name as string);
+          return null;
+        case "rename_group":
+          db.groups = db.groups.map((g) => (g === a.old ? (a.new as string) : g));
+          for (const b of db.books) if (b.group === a.old) b.group = a.new as string;
+          return null;
+        case "delete_group":
+          db.groups = db.groups.filter((g) => g !== a.name);
+          for (const b of db.books) if (b.group === a.name) b.group = null;
+          return null;
+        case "open_book": {
+          const b = find(a.id);
+          const paged = ["PDF", "CBZ", "DJVU"].includes(b.format);
+          return {
+            id: b.id,
+            title: b.title,
+            author: b.author,
+            format: b.format,
+            kind: paged ? "paged" : "flow",
+            toc: paged
+              ? [0, 2, 4].map((p) => ({ title: `第 ${p + 1} 页`, depth: 0, location: { kind: "page", page: p } }))
+              : [0, 1, 2].flatMap((c) => [
+                  { title: `第${c + 1}回 示例章节`, depth: 0, location: { kind: "flow", chapter: c, block: 0 } },
+                  { title: `${c + 1}.1 小节`, depth: 1, location: { kind: "flow", chapter: c, block: 5 } },
+                  { title: `${c + 1}.1.1 细目`, depth: 2, location: { kind: "flow", chapter: c, block: 6 } },
+                  { title: `${c + 1}.2 小节`, depth: 1, location: { kind: "flow", chapter: c, block: 12 } },
+                ]),
+            chapters: paged
+              ? []
+              : [0, 1, 2].map((c) => ({
+                  title: `第${c + 1}回 示例章节`,
+                  blocks: chapter(c).length,
+                  chars: chapter(c).reduce((n, bl) => n + JSON.stringify(bl).length, 0),
+                })),
+            pages: paged ? [1.414, 1.414, 1.414, 1.414, 1.414] : [],
+            position: b.position,
+            readSeconds: b.readSeconds,
+            readingSpeed: b.readingSpeed,
+            rotation: b.rotation,
+          };
+        }
+        case "get_chapter":
+          return chapter(a.index as number);
+        case "search_book":
+          return [0, 1, 2].map((c) => ({ location: { kind: "flow", chapter: c, block: 3 }, snippet: `…${String(a.query)}…示例片段` }));
+        case "save_progress": {
+          const b = find(a.id);
+          b.position = a.position as Location;
+          b.progress = a.progress as number;
+          b.lastRead = now();
+          return null;
+        }
+        case "paper_detect":
+          return "arXiv:1706.03762";
+        case "paper_lookup":
+        case "paper_lookup_reference":
+          return SAMPLE_PAPER;
+        case "paper_save": {
+          const b = db.books.find((x) => x.id === a.id)!;
+          b.paper = a.info as PaperInfo;
+          return b;
+        }
+        case "paper_import":
+          return { id: "0003", added: false };
+        case "paper_references":
+          return a.id === "0003"
+            ? [
+                { number: 1, text: "A. Author. The first cited paper. In Proceedings, 2014.", page: 4 },
+                { number: 2, text: "B. Writer. The second cited paper. Journal, 2015.", page: 4 },
+                { number: 3, text: "C. Scribe. The third cited paper. 2016.", page: 4 },
+              ]
+            : [];
+        case "citation_text":
+          return `@article{vaswani2017,\n  title = {{Attention Is All You Need}},\n  note = {${a.format}}\n}\n`;
+        case "citation_export":
+          return "/tmp/references.bib";
+        case "ocr_status":
+          return { pages: 5, pending: [0, 1, 2].filter((p) => !db.ocr.has(p)) };
+        case "ocr_model": {
+          const url = `https://paddle-model-ecology.bj.bcebos.com/paddlex/official_inference_model/paddle3.0.0/${a.name}_onnx_infer.tar`;
+          return fetch(url).then((r) => r.arrayBuffer());
+        }
+        case "ocr_page_image":
+          return samplePage(a.page as number, a.width as number);
+        case "ocr_save_page":
+          db.ocr.set(a.page as number, a.runs as TextRun[]);
+          return null;
+        case "ocr_finish":
+          return null;
+        case "get_page_text":
+          if (db.ocr.has(a.page as number)) return db.ocr.get(a.page as number);
+          return [
+            { text: "Attention Is All You Need", x: 0.25, y: 0.2, w: 0.5, h: 0.03 },
+            { text: "The dominant sequence transduction models are based on", x: 0.15, y: 0.4, w: 0.7, h: 0.015 },
+            { text: "complex recurrent or convolutional neural networks [1, 2].", x: 0.15, y: 0.42, w: 0.65, h: 0.015 },
+          ];
+        case "get_annotations":
+          return db.annotations.get(a.id as string) ?? { bookmarks: [], highlights: [], notes: [] };
+        case "save_annotations":
+          db.annotations.set(a.id as string, a.annotations as Annotations);
+          return null;
+        case "add_reading_time": {
+          const b = find(a.id);
+          b.readSeconds += a.seconds as number;
+          if (a.speed) b.readingSpeed = a.speed as number;
+          return b;
+        }
+        case "ai_get_config":
+          return aiStatus();
+        case "ai_set_config":
+          db.ai = a.config as AiConfig;
+          if (typeof a.apiKey === "string") db.aiKey = a.apiKey !== "";
+          return aiStatus();
+        case "ai_test":
+          return "连接成功";
+        case "ai_list_models":
+          return ["qwen3:8b", "llama3.2"];
+        case "ai_estimate_book":
+          return { units: 3, cachedUnits: 1, bookCached: false, inputTokens: 52000, outputTokens: 2700, cost: 0.26 };
+        case "ai_cancel":
+          return null;
+        case "ai_run": {
+          const task = a.task as AiTask;
+          if (task.kind === "buildIndex") {
+            let index = 0;
+            const send = (message: AiEvent) =>
+              (window as unknown as { __TAURI_INTERNALS__: { runCallback: (id: number, d: unknown) => void } }).__TAURI_INTERNALS__.runCallback(
+                (a.onEvent as { id: number }).id,
+                { index: index++, message },
+              );
+            [0, 32, 64, 96, 120].forEach((done, i) => setTimeout(() => send({ type: "progress", done, total: 120, label: "" }), 200 * (i + 1)));
+            setTimeout(() => {
+              db.indexed.add(task.bookId);
+              send({ type: "done", text: "120", cached: false });
+            }, 1300);
+            return null;
+          }
+          if (task.kind === "mindMap") {
+            const outline =
+              "- 第一回 宴桃园豪杰三结义\n  - 背景\n    - 天下大势 分久必合 合久必分\n    - 黄巾起义\n  - 人物\n    - 刘备：汉室宗亲\n    - 关羽：红脸长髯\n    - 张飞：豹头环眼\n  - 事件\n    - 桃园结义\n    - 招募乡勇\n    - 破黄巾初立战功\n  - 主旨\n    - 忠义\n    - 乱世英雄";
+            stream(a.onEvent as { id: number }, outline, task.scope.kind === "book");
+            return null;
+          }
+          if (task.kind === "generateCards" || task.kind === "quiz") {
+            const result =
+              task.kind === "quiz"
+                ? [0, 1].map((i) => ({
+                    question: `第 ${i + 1} 题：全书开篇讲的是什么？`,
+                    options: ["天下大势", "桃园结义", "赤壁之战", "三顾茅庐"],
+                    answer: 0,
+                    explanation: "开篇即点明分合之势。",
+                    quote: "话说天下大势",
+                  }))
+                : ["什么是分久必合？", "周末七国的结局是什么？"].map((front) => ({ front, back: "示例答案", quote: "话说天下大势" }));
+            setTimeout(() => stream(a.onEvent as { id: number }, JSON.stringify(result)), 200);
+            return null;
+          }
+          if (task.kind === "define") {
+            stream(a.onEvent as { id: number }, `${task.word}：此处指天下局势的走向。`);
+            return null;
+          }
+          if (task.kind === "ask") {
+            const sources: Source[] = [0, 1, 2].map((c) => ({
+              n: c + 1,
+              title: `第${c + 1}回 示例章节`,
+              location: { kind: "flow", chapter: c, block: 3 },
+              excerpt: "话说天下大势，分久必合，合久必分。周末七国分争，并入于秦。",
+            }));
+            const answer =
+              task.history.length > 1
+                ? "继续说明：后来**楚汉相争**，又并入于汉 [2]。"
+                : "开篇点明了全书主旨：**天下大势，分久必合，合久必分** [1]。\n\n- 周末七国分争，并入于秦 [1]\n- 楚汉分争，又并入于汉 [2][3]";
+            stream(a.onEvent as { id: number }, answer, false, sources);
+            return null;
+          }
+          const text =
+            task.kind === "chat"
+              ? task.action === "translate"
+                ? "**译文**：The world under heaven, after a long period of division, tends to unite."
+                : `这句话出自《三国演义》开篇，意思是：\n\n- 天下**分裂久了**必然统一\n- 统一久了又会分裂\n\n${task.history.length ? "（追问回答）" : ""}`
+              : `## 概述\n本章讲述了天下大势分合的规律。\n\n- 要点一：周末七国分争\n- 要点二：楚汉相争\n- 要点三：三国鼎立`;
+          stream(a.onEvent as { id: number }, text, task.kind === "summarizeBook");
+          return null;
+        }
+        case "ai_organize":
+          return (a.bookIds as string[]).slice(0, 3).map((id, i) => ({
+            bookId: id,
+            group: ["古典名著", "计算机", "漫画"][i] ?? "其他",
+            author: i === 2 ? "某作者" : null,
+          }));
+        case "get_settings":
+          return db.settings;
+        case "set_settings":
+          db.settings = a.settings;
+          return null;
+        case "plugin:webview|set_webview_zoom":
+          // The browser has no webview zoom; CSS zoom lays out the same way.
+          document.documentElement.style.setProperty("zoom", String(a.value));
+          return null;
+        case "tts_has_key":
+          return false;
+        case "tts_set_key":
+          return null;
+        case "tts_synthesize":
+          throw "No key for the voice service yet";
+        case "plugin:app|version":
+          return "0.7.1";
+        case "plugin:dialog|open":
+          return ["/Users/demo/Books/新导入的书.epub"];
+        default:
+          return null;
+      }
+    },
+    { shouldMockEvents: true },
+  );
+}

@@ -1,0 +1,145 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AiReader",
+  "version": "0.7.9",
+  "identifier": "com.aireader.reader",
+  "build": {
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "AiReader",
+        "width": 1200,
+        "height": 820,
+        "minWidth": 560,
+        "minHeight": 420,
+        "dragDropEnabled": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data: blob: book: http://book.localhost; style-src 'self' 'unsafe-inline'; font-src 'self' book: http://book.localhost; connect-src 'self' ipc: http://ipc.localhost; media-src 'self' blob:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    },
+    "fileAssociations": [
+      {
+        "ext": [
+          "epub"
+        ],
+        "name": "EPUB",
+        "description": "EPUB e-book",
+        "role": "Viewer",
+        "rank": "Default",
+        "mimeType": "application/epub+zip",
+        "contentTypes": [
+          "org.idpf.epub-container"
+        ]
+      },
+      {
+        "ext": [
+          "mobi",
+          "azw",
+          "azw3",
+          "prc"
+        ],
+        "name": "Kindle book",
+        "description": "MOBI / AZW3 e-book",
+        "role": "Viewer",
+        "rank": "Default",
+        "mimeType": "application/x-mobipocket-ebook"
+      },
+      {
+        "ext": [
+          "fb2"
+        ],
+        "name": "FictionBook",
+        "description": "FB2 e-book",
+        "role": "Viewer",
+        "rank": "Default",
+        "mimeType": "application/x-fictionbook+xml"
+      },
+      {
+        "ext": [
+          "cbz"
+        ],
+        "name": "Comic book",
+        "description": "CBZ comic archive",
+        "role": "Viewer",
+        "rank": "Default",
+        "mimeType": "application/vnd.comicbook+zip"
+      },
+      {
+        "ext": [
+          "pdf"
+        ],
+        "name": "PDF",
+        "description": "PDF document",
+        "role": "Viewer",
+        "rank": "Alternate",
+        "mimeType": "application/pdf",
+        "contentTypes": [
+          "com.adobe.pdf"
+        ]
+      },
+      {
+        "ext": [
+          "djvu",
+          "djv"
+        ],
+        "name": "DjVu document",
+        "description": "DjVu scanned book",
+        "role": "Viewer",
+        "rank": "Alternate",
+        "mimeType": "image/vnd.djvu"
+      },
+      {
+        "ext": [
+          "rtf"
+        ],
+        "name": "Rich Text",
+        "description": "RTF document",
+        "role": "Viewer",
+        "rank": "Alternate",
+        "mimeType": "application/rtf"
+      },
+      {
+        "ext": [
+          "odt"
+        ],
+        "name": "OpenDocument text",
+        "description": "ODT document",
+        "role": "Viewer",
+        "rank": "Alternate",
+        "mimeType": "application/vnd.oasis.opendocument.text"
+      },
+      {
+        "ext": [
+          "md",
+          "markdown"
+        ],
+        "name": "Markdown",
+        "description": "Markdown document",
+        "role": "Viewer",
+        "rank": "Alternate",
+        "mimeType": "text/markdown"
+      }
+    ]
+  }
+}

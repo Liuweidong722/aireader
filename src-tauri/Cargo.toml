@@ -1,0 +1,75 @@
+[package]
+name = "aireader"
+version = "0.7.9"
+edition = "2024"
+description = "A desktop reader for EPUB, PDF, TXT, Markdown, MOBI/AZW3, FB2, DOCX and CBZ"
+
+[lib]
+name = "aireader"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+anyhow = "1.0.104"
+base64 = "0.23.1"
+chardetng = "1.0.0"
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+ego-tree = "0.11"
+encoding_rs = "0.8.42"
+epub = "2.1.5"
+futures-util = "0.3.34"
+digest_auth = "0.3.1"
+djvu-rs = { version = "0.44", default-features = false, features = ["std"] }
+hayagriva = { version = "0.10.1", default-features = false, features = ["archive"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+keyring-core = "1.0.1"
+log = "0.4.34"
+mobi = "0.8.0"
+natord = "1.0.9"
+opendict-rs = "0.1.0"
+pdfium-render = { version = "0.9.4", default-features = false, features = ["pdfium_latest", "thread_safe"] }
+pulldown-cmark = "0.13.4"
+regex = "1.13.1"
+reqwest = { version = "0.13", default-features = false, features = ["stream"] }
+rig-core = { version = "0.45", features = ["reqwest"] }
+rig-reqwest = "0.45"
+rig-sqlite = "0.45.0"
+roxmltree = "0.21.1"
+rtf-parser = "0.4.3"
+rs-fsrs = { version = "1.2.1", features = ["serde"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+schemars = "1"
+scraper = "0.29.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+sqlite-vec = "0.1"
+tauri = { version = "2.12.5", features = [] }
+tauri-plugin-dialog = "2.8.4"
+tauri-plugin-log = "2.10.1"
+tauri-plugin-opener = "2"
+tokio = { version = "1.54.1", features = ["sync", "rt", "macros", "time", "fs"] }
+tokio-rusqlite = { version = "0.6", default-features = false, features = ["bundled"] }
+unicode-normalization = "0.1.26"
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
+
+# Desktop only: phones run one instance and manage window size themselves.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-single-instance = "2.5.4"
+tauri-plugin-window-state = "2.5.0"
+keyring = "4.2"
+
+# Phones: the system keychain through the platform's own store (see ai/config.rs).
+[target.'cfg(target_os = "ios")'.dependencies]
+apple-native-keyring-store = { version = "1", features = ["protected"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+android-native-keyring-store = "1"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", features = [] }
+
+[dev-dependencies]
+rig-core = { version = "0.45", features = ["reqwest", "test-utils"] }

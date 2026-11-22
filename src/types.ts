@@ -1,0 +1,503 @@
+// Mirrors the Rust types serialized by src-tauri (model.rs, library.rs, commands.rs).
+
+export type Location = { kind: "flow"; chapter: number; block: number } | { kind: "page"; page: number };
+
+export interface Book {
+  id: string;
+  title: string;
+  author: string | null;
+  format: string;
+  fileName: string;
+  size: number;
+  sha256: string;
+  hasCover: boolean;
+  added: number;
+  lastRead: number | null;
+  progress: number;
+  position: Location | null;
+  /** A book is in at most one group; null = ungrouped. */
+  group: string | null;
+  /** Active reading time in seconds. */
+  readSeconds: number;
+  /** Characters per minute (reflowable) or pages per minute (paged). */
+  readingSpeed: number | null;
+  /** Page rotation in degrees, for paged books. */
+  rotation: number;
+  missing: boolean;
+  /** Came from another device; when also `missing`, its file can be downloaded. */
+  synced: boolean;
+  /** Bibliographic details, once looked up or filled in. */
+  paper: PaperInfo | null;
+}
+
+export interface PaperInfo {
+  /** "article", "conference", "preprint", "book" or "other". */
+  kind: string;
+  title: string;
+  /** "Family, Given" when the two are known apart. */
+  authors: string[];
+  year: number | null;
+  venue: string | null;
+  volume: string | null;
+  issue: string | null;
+  pages: string | null;
+  publisher: string | null;
+  doi: string | null;
+  arxiv: string | null;
+  url: string | null;
+  summary: string | null;
+  /** An open copy of the file, if one is known. */
+  pdfUrl: string | null;
+}
+
+/** An entry of a paper's reference list. */
+export interface Reference {
+  number: number;
+  text: string;
+  page: number;
+}
+
+export interface Shelf {
+  books: Book[];
+  groups: string[];
+}
+
+export interface BookPatch {
+  title?: string;
+  author?: string;
+  /** null removes the book from its group. */
+  group?: string | null;
+  rotation?: number;
+}
+
+export interface ImportProgress {
+  done: number;
+  total: number;
+  name: string;
+}
+
+export interface ImportReport {
+  added: string[];
+  duplicates: string[];
+  failed: [string, string][];
+  /** Ids of added books that may be another file of a book already on the shelf. */
+  possibleDuplicates: string[];
+}
+
+/** One file of a book that is on the shelf several times. */
+export interface DuplicateCopy {
+  id: string;
+  score: number;
+  chars: number;
+  pages: number | null;
+  dpi: number | null;
+  hasText: boolean;
+  tocEntries: number;
+  /** Share of the group's most complete copy (0..1). */
+  completeness: number;
+}
+
+export interface DuplicateGroup {
+  /** Best first. */
+  copies: DuplicateCopy[];
+  /** False when a copy could only be matched by title and page count. */
+  confident: boolean;
+}
+
+export interface MergeReport {
+  removed: number;
+  highlights: number;
+  bookmarks: number;
+}
+
+export interface TocEntry {
+  title: string;
+  depth: number;
+  location: Location;
+}
+
+export interface OpenedBook {
+  id: string;
+  title: string;
+  author: string | null;
+  format: string;
+  kind: "flow" | "paged";
+  toc: TocEntry[];
+  chapters: { title: string; blocks: number; chars: number }[];
+  /** Height/width ratio of each page (paged books). */
+  pages: number[];
+  position: Location | null;
+  readSeconds: number;
+  readingSpeed: number | null;
+  rotation: number;
+}
+
+export interface Bookmark {
+  id: string;
+  location: Location;
+  title: string;
+  excerpt: string;
+  created: number;
+  updated: number;
+}
+
+/**
+ * A highlighted range in a reflowable book. Offsets index the block's text (concatenated
+ * spans) in UTF-16 code units.
+ */
+export interface Highlight {
+  id: string;
+  chapter: number;
+  startBlock: number;
+  start: number;
+  endBlock: number;
+  end: number;
+  text: string;
+  color: HighlightColor;
+  note?: string | null;
+  created: number;
+  updated: number;
+}
+
+export type HighlightColor = "yellow" | "green" | "blue" | "pink" | "purple";
+
+/** A note on the whole book rather than a passage, such as an AI answer kept for later. */
+export interface BookNote {
+  id: string;
+  title: string;
+  /** Markdown. */
+  text: string;
+  created: number;
+  updated: number;
+}
+
+export interface Annotations {
+  bookmarks: Bookmark[];
+  highlights: Highlight[];
+  notes: BookNote[];
+}
+
+export interface Span {
+  text: string;
+  bold?: boolean;
+  italic?: boolean;
+  code?: boolean;
+  link?: boolean;
+  /** Where an internal link (e.g. a footnote reference) leads. */
+  target?: Location;
+}
+
+export type Block =
+  | { kind: "heading"; value: { level: number; spans: Span[] } }
+  | { kind: "paragraph"; value: Span[] }
+  | { kind: "quote"; value: Span[] }
+  | { kind: "listItem"; value: { marker: string; depth: number; spans: Span[] } }
+  | { kind: "code"; value: string }
+  | { kind: "image"; value: number }
+  | { kind: "rule" };
+
+export interface Hit {
+  location: Location;
+  snippet: string;
+}
+
+/** A flashcard. `bookId` is null once its book has left the shelf. */
+export interface Card {
+  id: string;
+  bookId: string | null;
+  bookTitle: string;
+  front: string;
+  back: string;
+  /** The sentence it came from. */
+  context: string;
+  location: Location | null;
+  created: number;
+  suspended: boolean;
+  /** Unix seconds. */
+  due: number;
+  reps: number;
+  lapses: number;
+}
+
+/** An online catalog of books. Its password is kept in the system keychain. */
+export interface OpdsCatalog {
+  id: string;
+  title: string;
+  url: string;
+  username: string;
+  /** "" for an OPDS catalog, or "gutendex" or "wikisource". */
+  kind: string;
+}
+
+export interface OpdsDownload {
+  url: string;
+  mime: string;
+  format: string;
+  extension: string;
+  title: string | null;
+}
+
+export interface OpdsEntry {
+  id: string;
+  title: string;
+  author: string | null;
+  summary: string;
+  cover: string | null;
+  /** The feed this entry leads to; books have `downloads` instead. */
+  link: string | null;
+  downloads: OpdsDownload[];
+}
+
+export interface OpdsFeed {
+  title: string;
+  entries: OpdsEntry[];
+  next: string | null;
+  search: string | null;
+}
+
+/** The text flashcards or a quiz are made from. */
+export type StudyScope = { kind: "chapter"; chapter: number } | { kind: "pages"; from: number; to: number } | { kind: "text"; title: string; text: string };
+
+/** A flashcard suggested by the AI. */
+export interface StudyCard {
+  front: string;
+  back: string;
+  /** A short excerpt it is based on. */
+  quote: string;
+}
+
+export interface QuizQuestion {
+  question: string;
+  options: string[];
+  /** Index of the right option. */
+  answer: number;
+  explanation: string;
+  quote: string;
+}
+
+/** An old highlight brought back today. */
+export interface DailyHighlight {
+  id: string;
+  bookId: string;
+  bookTitle: string;
+  text: string;
+  note: string | null;
+  color: HighlightColor;
+  location: Location;
+}
+
+/** The statistics page's numbers; times are in seconds. */
+export interface ReadingReport {
+  streak: number;
+  longestStreak: number;
+  today: number;
+  last7Days: number;
+  last30Days: number;
+  /** All reading time, including from before days were recorded. */
+  lifetimeSeconds: number;
+  years: number[];
+  days: { day: string; seconds: number }[];
+  yearSeconds: number;
+  books: { bookId: string; title: string; seconds: number }[];
+  highlights: number;
+  cardsReviewed: number;
+  finished: { id: string; title: string; finished: number }[];
+}
+
+export interface CardStats {
+  total: number;
+  due: number;
+  reviewedToday: number;
+}
+
+export interface DictRecord {
+  id: string;
+  name: string;
+  words: number;
+  enabled: boolean;
+}
+
+/** What one dictionary says about a word. */
+export interface Definition {
+  dictionary: string;
+  word: string;
+  text: string;
+}
+
+/** A passage found by searching the whole library. */
+export interface TextHit extends Hit {
+  /** Chapter or page. */
+  title: string;
+}
+
+export interface LibraryHits {
+  bookId: string;
+  hits: TextHit[];
+}
+
+/** Books added to the full-text index so far, while it is being built. */
+export interface IndexProgress {
+  done: number;
+  total: number;
+}
+
+// --- AI (src-tauri/src/ai) ---
+
+export interface AiConfig {
+  /** rig vendor id (anthropic, openai, deepseek, ollama, …) or "custom". */
+  provider: string;
+  model: string;
+  baseUrl: string | null;
+  language: string;
+  consented: boolean;
+  /** The model for semantic search; provider "" = none. */
+  embedding: EmbeddingConfig;
+}
+
+export interface EmbeddingConfig {
+  /** "", "ollama", "openai" or "custom" (any OpenAI-compatible URL). */
+  provider: string;
+  model: string;
+  baseUrl: string | null;
+}
+
+export interface AiStatus {
+  config: AiConfig;
+  hasKey: boolean;
+  local: boolean;
+  configured: boolean;
+  hasEmbeddingKey: boolean;
+}
+
+/** A book's semantic index. */
+export interface SemanticStatus {
+  /** An embedding model is set up, so an index can be built. */
+  available: boolean;
+  /** The embedding model runs locally (no consent needed). */
+  local: boolean;
+  /** Passages indexed with the current model; 0 = not built. */
+  passages: number;
+  /** An index exists but was built with another model. */
+  stale: boolean;
+}
+
+export type AiEvent =
+  | { type: "delta"; text: string }
+  | { type: "progress"; done: number; total: number; label: string }
+  | { type: "done"; text: string; cached: boolean }
+  | { type: "error"; message: string }
+  | { type: "sources"; sources: Source[] }
+  /** Tokens one request of the task used; `cost` in USD when known. */
+  | { type: "usage"; input: number; output: number; cost: number | null };
+
+/** Tokens (and USD cost, when known) used so far by a task. */
+export interface Usage {
+  input: number;
+  output: number;
+  cost: number | null;
+}
+
+/** A passage an answer may cite as [n]. */
+export interface Source {
+  n: number;
+  title: string;
+  location: Location;
+  excerpt: string;
+}
+
+export type ChatAction = "explain" | "translate" | "summarize";
+
+/** A saved conversation about a book; `data` is the AI panel's own record. */
+export interface ChatRecord {
+  id: string;
+  title: string;
+  /** Unix seconds. */
+  updated: number;
+  data: unknown;
+}
+
+export interface ChatTurn {
+  role: "user" | "assistant";
+  text: string;
+}
+
+export type AiTask =
+  | { kind: "summarizeChapter"; bookId: string; chapter: number }
+  | { kind: "summarizePages"; bookId: string; from: number; to: number }
+  | { kind: "summarizeBook"; bookId: string }
+  | { kind: "paperBrief"; bookId: string }
+  | {
+      kind: "chat";
+      bookTitle: string;
+      selection: string;
+      context: string;
+      action: ChatAction | null;
+      history: ChatTurn[];
+    }
+  | { kind: "define"; bookTitle: string; word: string; context: string }
+  | { kind: "generateCards"; bookId: string; scope: StudyScope; count: number }
+  | { kind: "quiz"; bookId: string; scope: StudyScope }
+  | { kind: "ask"; bookId: string; location: Location | null; history: ChatTurn[]; spoilerFree?: boolean }
+  | { kind: "buildIndex"; bookId: string }
+  | { kind: "mindMap"; bookId: string; scope: MindMapScope; refresh?: boolean };
+
+export type MindMapScope =
+  { kind: "chapter"; chapter: number } | { kind: "pages"; from: number; to: number } | { kind: "book" } | { kind: "text"; title: string; text: string };
+
+export interface BookEstimate {
+  units: number;
+  cachedUnits: number;
+  bookCached: boolean;
+  inputTokens: number;
+  outputTokens: number;
+  /** USD, when the model's prices are known. */
+  cost: number | null;
+}
+
+export interface Suggestion {
+  bookId: string;
+  /** Only set when it differs from the book's current group. */
+  group: string | null;
+  author: string | null;
+}
+
+/** A run of text on a PDF page; coordinates are fractions of the unrotated page, from top-left. */
+export interface TextRun {
+  text: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface SyncConfig {
+  /** "" (off), "server" (an AiReader server), "webdav" or "folder". */
+  backend: string;
+  url: string;
+  username: string;
+  folder: string;
+  files: boolean;
+}
+
+export interface SyncStatus {
+  config: SyncConfig;
+  hasPassword: boolean;
+  /** Signed in to the AiReader server in `config`. */
+  signedIn: boolean;
+  lastSync: number | null;
+  running: boolean;
+  error: string | null;
+}
+
+/** What an AiReader server says about itself. */
+export interface ServerInfo {
+  registration: boolean;
+  minPassword: number;
+}
+
+/** What a sync brought in (the `sync-changed` event). */
+export interface SyncChanges {
+  books: string[];
+  shelf: boolean;
+  cards: boolean;
+}
